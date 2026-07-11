@@ -108,3 +108,21 @@
   (is (thrown? #?(:clj Exception :cljs js/Error)
                (a/apply-pose-constraints (a/skeleton [(a/bone :root "Root")]) (a/pose {})
                                          [(a/pose-constraint :missing :copy-translation :root {:target :none})]))))
+
+(deftest two-bone-ik-reaches-planar-targets
+  (let [solution (a/solve-two-bone-ik {:root [0 0] :length-a 2 :length-b 2 :target [2 2] :elbow :positive})
+        pose (a/two-bone-ik-pose :upper :lower solution)]
+    (is (< (#?(:clj Math/abs :cljs js/Math.abs) (- 2 (first (:ik/tip solution)))) 1.0e-8))
+    (is (< (#?(:clj Math/abs :cljs js/Math.abs) (- 2 (second (:ik/tip solution)))) 1.0e-8))
+    (is (false? (:ik/clamped? solution)))
+    (is (= (:ik/root-rotation solution) (get-in pose [:pose/bones :upper :rotation 2])))
+    (is (= (:ik/mid-rotation solution) (get-in pose [:pose/bones :lower :rotation 2])))))
+
+(deftest two-bone-ik-clamps-unreachable-targets
+  (let [far (a/solve-two-bone-ik {:length-a 2 :length-b 1 :target [10 0]})
+        opposite (a/solve-two-bone-ik {:length-a 2 :length-b 1 :target [2 0] :elbow :negative})]
+    (is (:ik/clamped? far))
+    (is (< (:ik/solved-distance far) 3))
+    (is (neg? (:ik/root-rotation opposite)))
+    (is (thrown? #?(:clj Exception :cljs js/Error)
+                 (a/solve-two-bone-ik {:length-a 0 :length-b 1 :target [1 0]})))))

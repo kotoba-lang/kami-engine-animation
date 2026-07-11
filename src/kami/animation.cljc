@@ -272,3 +272,41 @@
   [skeleton timeline time constraints]
   (bone-skinning-matrices skeleton
                           (apply-pose-constraints skeleton (evaluate-skeleton-pose skeleton timeline time) constraints)))
+
+(defn solve-two-bone-ik
+  "Solve a planar XY two-bone chain whose rest bones point along +X.
+  Returns root/mid Z rotations plus reached joint/tip positions. Targets
+  outside the chain range are clamped while preserving target direction."
+  [{:keys [root length-a length-b target elbow]
+    :or {root [0 0] elbow :positive}}]
+  (when-not (and (pos? length-a) (pos? length-b) (= 2 (count root)) (= 2 (count target))
+                 (#{:positive :negative} elbow))
+    (throw (ex-info "invalid two-bone IK input" {:length-a length-a :length-b length-b :root root :target target :elbow elbow})))
+  (let [[rx ry] root [tx ty] target dx (- tx rx) dy (- ty ry)
+        requested (#?(:clj Math/sqrt :cljs js/Math.sqrt) (+ (* dx dx) (* dy dy)))
+        minimum (+ (#?(:clj Math/abs :cljs js/Math.abs) (- length-a length-b)) 1.0e-9)
+        maximum (- (+ length-a length-b) 1.0e-9) distance (max minimum (min maximum requested))
+        direction (if (< requested 1.0e-9) 0.0 (#?(:clj Math/atan2 :cljs js/Math.atan2) dy dx))
+        clamp #(max -1.0 (min 1.0 %))
+        shoulder-offset (#?(:clj Math/acos :cljs js/Math.acos)
+                         (clamp (/ (+ (* length-a length-a) (* distance distance) (- (* length-b length-b)))
+                                   (* 2 length-a distance))))
+        internal (#?(:clj Math/acos :cljs js/Math.acos)
+                  (clamp (/ (+ (* length-a length-a) (* length-b length-b) (- (* distance distance)))
+                            (* 2 length-a length-b))))
+        sign (if (= elbow :positive) 1.0 -1.0) pi-value #?(:clj Math/PI :cljs js/Math.PI)
+        root-angle (+ direction (* sign shoulder-offset)) mid-angle (* (- sign) (- pi-value internal))
+        joint [(+ rx (* length-a (#?(:clj Math/cos :cljs js/Math.cos) root-angle)))
+               (+ ry (* length-a (#?(:clj Math/sin :cljs js/Math.sin) root-angle)))]
+        world-mid (+ root-angle mid-angle)
+        tip [(+ (first joint) (* length-b (#?(:clj Math/cos :cljs js/Math.cos) world-mid)))
+             (+ (second joint) (* length-b (#?(:clj Math/sin :cljs js/Math.sin) world-mid)))]]
+    {:ik/root-rotation root-angle :ik/mid-rotation mid-angle :ik/joint joint :ik/tip tip
+     :ik/requested-distance requested :ik/solved-distance distance
+     :ik/clamped? (not= requested distance) :ik/elbow elbow}))
+
+(defn two-bone-ik-pose
+  "Convert a planar IK solution to sparse Z-rotation pose channels."
+  [root-bone mid-bone solution]
+  (pose {root-bone {:rotation [0 0 (:ik/root-rotation solution)]}
+         mid-bone {:rotation [0 0 (:ik/mid-rotation solution)]}}))
