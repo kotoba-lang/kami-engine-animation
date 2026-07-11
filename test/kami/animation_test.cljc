@@ -87,3 +87,24 @@
     (is (= [identity identity] rest))
     (is (= [2.0 0.0 0.0] (mapv #(nth (first moved) %) [12 13 14])))
     (is (= [2.0 0.0 0.0] (mapv #(nth (second moved) %) [12 13 14])))))
+
+(deftest ordered-pose-constraints
+  (let [rig (a/skeleton [(a/bone :root "Root" nil {:translation [2 0 0]})
+                         (a/bone :hand "Hand" :root {:rotation [0 0 0]})])
+        copied (a/pose-constraint :follow :copy-translation :hand {:target :root :influence 0.5})
+        limited (a/pose-constraint :limit :limit-rotation :hand {:min [-1 -1 -1] :max [1 1 1]})
+        result (a/apply-pose-constraints rig (a/pose {:hand {:translation [0 0 0] :rotation [2 -2 0.5]}})
+                                         [copied limited])]
+    (is (= [1.0 0.0 0.0] (get-in result [:pose/bones :hand :translation])))
+    (is (= [1 -1 0.5] (get-in result [:pose/bones :hand :rotation])))
+    (is (= result (a/apply-pose-constraints rig result [(assoc limited :constraint/enabled? false)])))
+    (is (= 2 (count (a/evaluate-constrained-skinning rig (a/timeline 1 [(a/track :x [(a/keyframe 0 0)])]) 0 [copied limited]))))))
+
+(deftest constraint-validation
+  (is (thrown? #?(:clj Exception :cljs js/Error) (a/pose-constraint :bad :unknown :root {})))
+  (is (thrown? #?(:clj Exception :cljs js/Error) (a/pose-constraint :bad :copy-translation :root {:target :hand :influence 2})))
+  (is (thrown? #?(:clj Exception :cljs js/Error)
+               (a/pose-constraint :bad :limit-rotation :root {:min [1 0 0] :max [0 1 1]})))
+  (is (thrown? #?(:clj Exception :cljs js/Error)
+               (a/apply-pose-constraints (a/skeleton [(a/bone :root "Root")]) (a/pose {})
+                                         [(a/pose-constraint :missing :copy-translation :root {:target :none})]))))

@@ -228,3 +228,47 @@
   "Evaluate bone tracks and return ordered GPU skinning matrices."
   [skeleton timeline time]
   (bone-skinning-matrices skeleton (evaluate-skeleton-pose skeleton timeline time)))
+
+(defn pose-constraint
+  "Create an ordered skeletal pose constraint. Supported kinds:
+  :copy-translation {:target bone-id :influence 0..1}
+  :limit-rotation {:min [xyz] :max [xyz]}."
+  [id kind bone-id options]
+  (when-not (#{:copy-translation :limit-rotation} kind)
+    (throw (ex-info "unsupported pose constraint" {:kind kind})))
+  (when-let [influence (:influence options)]
+    (when-not (<= 0 influence 1) (throw (ex-info "constraint influence must be within [0,1]" {:influence influence}))))
+  (when (= kind :limit-rotation)
+    (when-not (and (= 3 (count (:min options))) (= 3 (count (:max options)))
+                   (every? true? (map <= (:min options) (:max options))))
+      (throw (ex-info "invalid rotation limit" {:options options}))))
+  {:constraint/id id :constraint/kind kind :constraint/bone bone-id :constraint/options options
+   :constraint/enabled? true})
+
+(defn apply-pose-constraints
+  "Apply constraints in vector order to local pose channels. Missing pose
+  channels start from rest values; disabled constraints are preserved/no-op."
+  [skeleton pose constraints]
+  (let [bones (into {} (map (juxt :bone/id identity) (:skeleton/bones skeleton)))
+        local (fn [result id] (merge (:bone/rest (bones id)) (get-in result [:pose/bones id])))]
+    (reduce
+     (fn [result {:constraint/keys [kind bone options enabled?] :as constraint}]
+       (if (false? enabled?) result
+         (do
+           (when-not (bones bone) (throw (ex-info "constraint bone not found" {:constraint constraint :bone bone})))
+           (case kind
+             :copy-translation
+             (let [target (:target options) _ (when-not (bones target) (throw (ex-info "constraint target not found" {:target target})))
+                   influence (:influence options 1.0) from (:translation (local result bone)) to (:translation (local result target))]
+               (assoc-in result [:pose/bones bone :translation] (mapv #(+ %1 (* influence (- %2 %1))) from to)))
+             :limit-rotation
+             (let [rotation (:rotation (local result bone)) minimum (:min options) maximum (:max options)]
+               (assoc-in result [:pose/bones bone :rotation] (mapv #(max %2 (min %3 %1)) rotation minimum maximum)))
+             result))))
+     pose constraints)))
+
+(defn evaluate-constrained-skinning
+  "Evaluate timeline tracks, ordered pose constraints, then inverse-bind skinning."
+  [skeleton timeline time constraints]
+  (bone-skinning-matrices skeleton
+                          (apply-pose-constraints skeleton (evaluate-skeleton-pose skeleton timeline time) constraints)))
