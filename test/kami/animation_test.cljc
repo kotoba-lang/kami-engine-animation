@@ -77,3 +77,13 @@
                (a/bone-track-target :arm :opacity :x)))
   (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                (a/bone-track-target :arm :rotation :w))))
+
+(deftest inverse-bind-skinning-matrices
+  (let [rig (a/skeleton [(a/bone :root "Root" nil {:translation [2 0 0]})
+                         (a/bone :child "Child" :root {:translation [0 3 0]})])
+        identity [1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0]
+        rest (a/bone-skinning-matrices rig (a/pose {}))
+        moved (a/bone-skinning-matrices rig (a/pose {:root {:translation [4 0 0]}}))]
+    (is (= [identity identity] rest))
+    (is (= [2.0 0.0 0.0] (mapv #(nth (first moved) %) [12 13 14])))
+    (is (= [2.0 0.0 0.0] (mapv #(nth (second moved) %) [12 13 14])))))

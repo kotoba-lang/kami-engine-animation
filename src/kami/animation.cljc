@@ -130,6 +130,7 @@
          (reduce + (for [k (range 4)] (* (nth a (+ (* k 4) r)) (nth b (+ (* c 4) k))))))))
 (defn- sin* [x] #?(:clj (Math/sin (double x)) :cljs (js/Math.sin x)))
 (defn- cos* [x] #?(:clj (Math/cos (double x)) :cljs (js/Math.cos x)))
+(defn- abs* [x] #?(:clj (Math/abs (double x)) :cljs (js/Math.abs x)))
 (defn- trs-matrix [{:keys [translation rotation scale]}]
   (let [[x y z] translation [rx ry rz] rotation [sx sy sz] scale
         cx (cos* rx) sxr (sin* rx) cy (cos* ry) syr (sin* ry) cz (cos* rz) szr (sin* rz)
@@ -188,3 +189,42 @@
   "Evaluate animated pose and return GPU-ready bone world matrices."
   [skeleton timeline time]
   (bone-world-matrices skeleton (evaluate-skeleton-pose skeleton timeline time)))
+
+(defn- matrix-inverse
+  "Portable Gauss-Jordan inverse for a column-major 4x4 matrix."
+  [m]
+  (let [rows (mapv (fn [r]
+                     (vec (concat (map #(nth m (+ (* % 4) r)) (range 4))
+                                  (map #(if (= r %) 1.0 0.0) (range 4))))) (range 4))]
+    (loop [a rows col 0]
+      (if (= col 4)
+        (vec (for [c (range 4) r (range 4)] (get-in a [r (+ 4 c)])))
+        (let [pivot-row (apply max-key #(abs* (get-in a [% col])) (range col 4))
+              pivot (get-in a [pivot-row col])]
+          (when (< (abs* pivot) 1.0e-10)
+            (throw (ex-info "non-invertible bind matrix" {:matrix m})))
+          (let [a (assoc a col (nth a pivot-row) pivot-row (nth a col))
+                normalized (mapv #(/ % pivot) (nth a col))
+                a (assoc a col normalized)
+                a (reduce (fn [rows r]
+                            (if (= r col) rows
+                              (let [factor (get-in rows [r col])]
+                                (assoc rows r (mapv - (nth rows r) (mapv #(* factor %) normalized))))))
+                          a (range 4))]
+            (recur a (inc col))))))))
+
+(defn bone-skinning-matrices
+  "Return matrices in skeleton order as animatedWorld × inverseBindWorld.
+  Rest pose therefore evaluates to identity, while animated pose produces
+  deformation matrices suitable for kami.webgpu.mesh joint palettes."
+  [skeleton pose]
+  (let [rest-world (bone-world-matrices skeleton (pose {}))
+        animated-world (bone-world-matrices skeleton pose)]
+    (mapv (fn [{:bone/keys [id]}]
+            (mat4-mul (get animated-world id) (matrix-inverse (get rest-world id))))
+          (:skeleton/bones skeleton))))
+
+(defn evaluate-skinning
+  "Evaluate bone tracks and return ordered GPU skinning matrices."
+  [skeleton timeline time]
+  (bone-skinning-matrices skeleton (evaluate-skeleton-pose skeleton timeline time)))
