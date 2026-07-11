@@ -38,3 +38,21 @@
     (is (= 4 (a/playback-time (a/timeline 4 [track]) 10)))
     (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                  (a/timeline 4 [track] {:loop-start 3 :loop-end 2})))))
+
+(deftest hierarchical-skeleton-pose-evaluation
+  (let [rig (a/skeleton [(a/bone :root "Root" nil {:translation [1 0 0]})
+                         (a/bone :arm "Arm" :root {:translation [0 2 0]})
+                         (a/bone :hand "Hand" :arm {:translation [0 1 0]})])
+        matrices (a/bone-world-matrices rig (a/pose {:arm {:translation [0 3 0]}}))]
+    (is (= 3 (count matrices)))
+    (is (= [1.0 4.0 0.0] (mapv #(nth (get matrices :hand) %) [12 13 14])))
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (a/bone-world-matrices rig (a/pose {:missing {:translation [0 0 0]}}))))))
+
+(deftest skeleton-integrity
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+               (a/skeleton [(a/bone :a "A") (a/bone :a "Again")])))
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+               (a/skeleton [(a/bone :a "A" :missing)])))
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+               (a/skeleton [(a/bone :a "A" :b) (a/bone :b "B" :a)]))))

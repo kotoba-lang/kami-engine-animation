@@ -95,3 +95,62 @@
                            (track target (remove #(= frame-id (:keyframe/id %))
                                                  (:track/keyframes t))) t)))
                  (remove #(empty? (:track/keyframes %))) vec))))
+
+;; Skeletal animation domain. Matrices are portable column-major vectors so
+;; the same evaluated pose can be uploaded by WebGPU, WebGL2, or WASM hosts.
+(defn bone
+  ([id name] (bone id name nil {}))
+  ([id name parent] (bone id name parent {}))
+  ([id name parent {:keys [translation rotation scale]
+                    :or {translation [0 0 0] rotation [0 0 0] scale [1 1 1]}}]
+   {:bone/id id :bone/name name :bone/parent parent
+    :bone/rest {:translation (vec translation) :rotation (vec rotation) :scale (vec scale)}}))
+
+(defn skeleton [bones]
+  (let [bones (vec bones) ids (mapv :bone/id bones) id-set (set ids)]
+    (when-not (= (count ids) (count id-set))
+      (throw (ex-info "duplicate bone id" {:ids ids})))
+    (doseq [{:bone/keys [id parent]} bones]
+      (when (and parent (not (id-set parent)))
+        (throw (ex-info "bone parent not found" {:bone id :parent parent})))
+      (loop [current parent seen #{id}]
+        (when current
+          (when (seen current) (throw (ex-info "bone hierarchy cycle" {:bone id :at current})))
+          (recur (:bone/parent (first (filter #(= current (:bone/id %)) bones))) (conj seen current)))))
+    {:skeleton/bones bones}))
+
+(defn pose
+  "Create a sparse map of bone-id to local TRS overrides. Missing channels
+  retain the bone's rest-pose value."
+  [entries]
+  {:pose/bones (into {} (map (fn [[id trs]] [id (select-keys trs [:translation :rotation :scale])]) entries))})
+
+(defn- mat4-mul [a b]
+  (vec (for [c (range 4) r (range 4)]
+         (reduce + (for [k (range 4)] (* (nth a (+ (* k 4) r)) (nth b (+ (* c 4) k))))))))
+(defn- sin* [x] #?(:clj (Math/sin (double x)) :cljs (js/Math.sin x)))
+(defn- cos* [x] #?(:clj (Math/cos (double x)) :cljs (js/Math.cos x)))
+(defn- trs-matrix [{:keys [translation rotation scale]}]
+  (let [[x y z] translation [rx ry rz] rotation [sx sy sz] scale
+        cx (cos* rx) sxr (sin* rx) cy (cos* ry) syr (sin* ry) cz (cos* rz) szr (sin* rz)
+        t [1 0 0 0 0 1 0 0 0 0 1 0 x y z 1]
+        mx [1 0 0 0 0 cx sxr 0 0 (- sxr) cx 0 0 0 0 1]
+        my [cy 0 (- syr) 0 0 1 0 0 syr 0 cy 0 0 0 0 1]
+        mz [cz szr 0 0 (- szr) cz 0 0 0 0 1 0 0 0 0 1]
+        s [sx 0 0 0 0 sy 0 0 0 0 sz 0 0 0 0 1]]
+    (mat4-mul t (mat4-mul mz (mat4-mul my (mat4-mul mx s))))))
+
+(defn bone-world-matrices
+  "Evaluate rest pose plus sparse local pose overrides into world matrices."
+  [skeleton pose]
+  (let [bones (:skeleton/bones skeleton) by-id (into {} (map (juxt :bone/id identity) bones))
+        overrides (:pose/bones pose)]
+    (doseq [id (keys overrides)]
+      (when-not (by-id id) (throw (ex-info "pose targets unknown bone" {:bone id}))))
+    (let [cache (atom {})
+          world (fn world [id]
+                  (or (get @cache id)
+                      (let [bone (by-id id) local (trs-matrix (merge (:bone/rest bone) (get overrides id)))
+                            result (if-let [parent (:bone/parent bone)] (mat4-mul (world parent) local) local)]
+                        (swap! cache assoc id result) result)))]
+      (into {} (map (fn [{:bone/keys [id]}] [id (world id)]) bones)))))
