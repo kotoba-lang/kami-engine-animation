@@ -154,3 +154,37 @@
                             result (if-let [parent (:bone/parent bone)] (mat4-mul (world parent) local) local)]
                         (swap! cache assoc id result) result)))]
       (into {} (map (fn [{:bone/keys [id]}] [id (world id)]) bones)))))
+
+(defn bone-track-target
+  "Canonical scalar timeline target for one bone TRS component."
+  [bone-id channel axis]
+  (when-not (#{:translation :rotation :scale} channel)
+    (throw (ex-info "invalid bone animation channel" {:channel channel})))
+  (when-not (#{:x :y :z} axis)
+    (throw (ex-info "invalid bone animation axis" {:axis axis})))
+  [:bone bone-id channel axis])
+
+(defn evaluate-skeleton-pose
+  "Evaluate canonical bone tracks into a sparse pose. Non-bone tracks are
+  ignored, allowing object and skeletal channels on the same timeline."
+  [skeleton timeline time]
+  (let [bone-ids (set (map :bone/id (:skeleton/bones skeleton)))
+        axis-index {:x 0 :y 1 :z 2}
+        defaults {:translation [0 0 0] :rotation [0 0 0] :scale [1 1 1]}]
+    (reduce (fn [result {:track/keys [target] :as t}]
+              (if (and (vector? target) (= 4 (count target)) (= :bone (first target)))
+                (let [[_ bone-id channel axis] target]
+                  (when-not (bone-ids bone-id)
+                    (throw (ex-info "bone track targets unknown bone" {:target target})))
+                  (bone-track-target bone-id channel axis)
+                  (update-in result [:pose/bones bone-id channel]
+                             (fn [values]
+                               (assoc (vec (or values (get defaults channel)))
+                                      (axis-index axis) (sample t time)))))
+                result))
+            {:pose/bones {}} (:timeline/tracks timeline))))
+
+(defn evaluate-skeleton
+  "Evaluate animated pose and return GPU-ready bone world matrices."
+  [skeleton timeline time]
+  (bone-world-matrices skeleton (evaluate-skeleton-pose skeleton timeline time)))

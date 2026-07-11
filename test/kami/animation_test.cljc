@@ -56,3 +56,24 @@
                (a/skeleton [(a/bone :a "A" :missing)])))
   (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                (a/skeleton [(a/bone :a "A" :b) (a/bone :b "B" :a)]))))
+
+(deftest bone-tracks-evaluate-to-world-matrices
+  (let [rig (a/skeleton [(a/bone :root "Root") (a/bone :hand "Hand" :root {:translation [0 1 0]})])
+        target (a/bone-track-target :hand :translation :x)
+        tl (a/timeline 2 [(a/track target [(a/keyframe 0 0) (a/keyframe 2 4)])
+                          (a/track :object/x [(a/keyframe 0 9) (a/keyframe 2 9)])])
+        pose (a/evaluate-skeleton-pose rig tl 1)
+        matrices (a/evaluate-skeleton rig tl 1)]
+    (is (= [2 0 0] (get-in pose [:pose/bones :hand :translation])))
+    (is (= [2.0 0.0 0.0] (mapv #(nth (get matrices :hand) %) [12 13 14])))
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (a/evaluate-skeleton rig
+                                      (a/timeline 1 [(a/track [:bone :missing :rotation :z]
+                                                              [(a/keyframe 0 0)])]) 0)))))
+
+(deftest canonical-bone-target-validation
+  (is (= [:bone :arm :rotation :z] (a/bone-track-target :arm :rotation :z)))
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+               (a/bone-track-target :arm :opacity :x)))
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+               (a/bone-track-target :arm :rotation :w))))
