@@ -20,3 +20,21 @@
   (let [t (a/track :x [(a/keyframe 0 0 :smooth) (a/keyframe 1 10)])]
     (is (= 1.5625 (a/sample t 0.25)))
     (is (= 8.4375 (a/sample t 0.75)))))
+
+(deftest editable-hermite-tangents
+  (let [ka (a/keyframe 0 0 :hermite {:tangent-out 20})
+        kb (a/keyframe 1 10 :linear {:tangent-in 0})
+        track (a/track :x [ka kb])]
+    (is (= 7.5 (a/sample track 0.5)))
+    (let [automatic (a/auto-tangents (a/track :x [(a/keyframe 0 0) (a/keyframe 1 10) (a/keyframe 2 0)]))]
+      (is (= 10 (:keyframe/tangent-out (first (:track/keyframes automatic)))))
+      (is (= 0 (:keyframe/tangent-in (second (:track/keyframes automatic))))))))
+
+(deftest playback-loop-and-rate
+  (let [track (a/track :x [(a/keyframe 0 0) (a/keyframe 4 4)])
+        looping (a/timeline 4 [track] {:loop-start 1 :loop-end 3 :loop? true :playback-rate 2})]
+    (is (= 2 (a/playback-time looping 2)))
+    (is (= {:x 2} (a/evaluate-playback looping 2)))
+    (is (= 4 (a/playback-time (a/timeline 4 [track]) 10)))
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (a/timeline 4 [track] {:loop-start 3 :loop-end 2})))))
