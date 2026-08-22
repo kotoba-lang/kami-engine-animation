@@ -1,4 +1,4 @@
-(ns kami.animation-test (:require [clojure.test :refer [deftest is]] [kami.animation :as a]))
+(ns kami.animation-test (:require [clojure.test :refer [deftest is testing]] [kami.animation :as a]))
 (deftest samples-and-clamps-keyframes
   (let [t (a/track :cube/x [(a/keyframe 0 0) (a/keyframe 2 10)])]
     (is (= 0 (a/sample t -1))) (is (= 5 (a/sample t 1))) (is (= 10 (a/sample t 3)))
@@ -20,6 +20,26 @@
   (let [t (a/track :x [(a/keyframe 0 0 :smooth) (a/keyframe 1 10)])]
     (is (= 1.5625 (a/sample t 0.25)))
     (is (= 8.4375 (a/sample t 0.75)))))
+
+(deftest bezier-is-an-alias-of-hermite-and-nothing-said-so
+  ;; `interpolate` handles :bezier and :hermite with two identical `case`
+  ;; branches, both calling `hermite`. That the two agree was true only by
+  ;; duplication — no test compared them, and no test sampled :bezier at all.
+  ;;
+  ;; Measured 2026-08-24 by the mutation harness in com-junkawasaki/root:
+  ;; replacing the :bezier branch with plain linear interpolation left the
+  ;; whole suite GREEN. `editable-hermite-tangents` covers :hermite and
+  ;; `smooth-interpolation` covers :smooth; :bezier was covered by neither,
+  ;; so a curve silently becoming a straight line was invisible.
+  (let [opts {:tangent-out 20 :tangent-in 0}
+        bez (a/track :x [(a/keyframe 0 0 :bezier opts) (a/keyframe 1 10 :linear opts)])
+        her (a/track :x [(a/keyframe 0 0 :hermite opts) (a/keyframe 1 10 :linear opts)])]
+    (doseq [t [0.1 0.25 0.5 0.75 0.9]]
+      (is (= (a/sample her t) (a/sample bez t))
+          (str "the two names must sample identically at " t)))
+    (testing "and neither is linear — a straight line would make this test vacuous"
+      (let [lin (a/track :x [(a/keyframe 0 0 :linear opts) (a/keyframe 1 10 :linear opts)])]
+        (is (not= (a/sample lin 0.25) (a/sample bez 0.25)))))))
 
 (deftest editable-hermite-tangents
   (let [ka (a/keyframe 0 0 :hermite {:tangent-out 20})
